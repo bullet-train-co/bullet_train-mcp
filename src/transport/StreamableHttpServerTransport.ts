@@ -7,6 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import * as http from "http"
 import { randomUUID } from "crypto"
+import { requestContext } from "../request-context.js"
 
 /**
  * Session data for a connected client
@@ -427,140 +428,149 @@ export class StreamableHttpServerTransport implements Transport {
     })
 
     req.on("end", () => {
-      try {
-        // Parse JSON-RPC message
-        const message = JSON.parse(body) as JSONRPCMessage
+      // Extract Bearer token from Authorization header
+      const authHeader = req.headers.authorization
+      const bearerToken = authHeader?.startsWith("Bearer ")
+        ? authHeader.substring(7)
+        : undefined
 
-        // Handle initialization request (synchronous response on POST)
-        if (isInitializeRequest(message)) {
-          this.handleInitializeRequest(message, req, res)
-        } else if (isJSONRPCRequest(message) && message.method === "tools/list") {
-          // Synchronous response for tools/list similar to initialize
-          const sessionId = req.headers["mcp-session-id"] as string
+      // Run message handling within request context
+      requestContext.run({ bearerToken }, () => {
+        try {
+          // Parse JSON-RPC message
+          const message = JSON.parse(body) as JSONRPCMessage
 
-          if (!sessionId || !this.sessions.has(sessionId)) {
-            res.writeHead(400)
-            res.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                error: {
-                  code: -32000,
-                  message: "Invalid session. A valid Mcp-Session-Id header is required.",
-                },
-                id: "id" in message ? message.id : null,
-              }),
-            )
-            return
-          }
+          // Handle initialization request (synchronous response on POST)
+          if (isInitializeRequest(message)) {
+            this.handleInitializeRequest(message, req, res)
+          } else if (isJSONRPCRequest(message) && message.method === "tools/list") {
+            // Synchronous response for tools/list similar to initialize
+            const sessionId = req.headers["mcp-session-id"] as string
 
-          const session = this.sessions.get(sessionId)!
-
-          // Store mapping for this request
-          if (message.id !== undefined && message.id !== null) {
-            this.requestSessionMap.set(message.id, sessionId)
-            if (!session.pendingRequests) {
-              session.pendingRequests = new Set()
+            if (!sessionId || !this.sessions.has(sessionId)) {
+              res.writeHead(400)
+              res.end(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  error: {
+                    code: -32000,
+                    message: "Invalid session. A valid Mcp-Session-Id header is required.",
+                  },
+                  id: "id" in message ? message.id : null,
+                }),
+              )
+              return
             }
-            session.pendingRequests.add(message.id)
-          }
 
-          // Prepare response handler that will send the actual tools/list response on this POST
-          const responseHandler = (responseMessage: JSONRPCMessage): void => {
-            if (isJSONRPCResponse(responseMessage) && responseMessage.id === message.id) {
-              res.setHeader("Content-Type", "application/json")
-              res.writeHead(200)
-              res.end(JSON.stringify(responseMessage))
+            const session = this.sessions.get(sessionId)!
 
-              // Clean up mappings and handlers
-              this.removeInitResponseHandler(sessionId, responseHandler)
-              if (message.id !== undefined && message.id !== null) {
-                this.requestSessionMap.delete(message.id)
-                session.pendingRequests.delete(message.id)
+            // Store mapping for this request
+            if (message.id !== undefined && message.id !== null) {
+              this.requestSessionMap.set(message.id, sessionId)
+              if (!session.pendingRequests) {
+                session.pendingRequests = new Set()
               }
+              session.pendingRequests.add(message.id)
             }
-          }
 
-          this.addInitResponseHandler(sessionId, responseHandler)
+            // Prepare response handler that will send the actual tools/list response on this POST
+            const responseHandler = (responseMessage: JSONRPCMessage): void => {
+              if (isJSONRPCResponse(responseMessage) && responseMessage.id === message.id) {
+                res.setHeader("Content-Type", "application/json")
+                res.writeHead(200)
+                res.end(JSON.stringify(responseMessage))
 
-          // Forward the request to the protocol layer
-          if (session.messageHandler) {
-            session.messageHandler(message)
-          } else {
-            // No message handler, respond with error
-            this.removeInitResponseHandler(sessionId, responseHandler)
-            res.writeHead(500)
-            res.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                error: {
-                  code: -32603,
-                  message: "Internal error: No message handler available",
-                },
-                id: "id" in message ? message.id : null,
-              }),
-            )
-          }
-        } else {
-          // Handle regular requests (asynchronous - 202 on POST, response on GET stream)
-          const sessionId = req.headers["mcp-session-id"] as string
-
-          if (!sessionId || !this.sessions.has(sessionId)) {
-            res.writeHead(400)
-            res.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                error: {
-                  code: -32000,
-                  message: "Invalid session. A valid Mcp-Session-Id header is required.",
-                },
-                id: "id" in message ? message.id : null,
-              }),
-            )
-            return
-          }
-
-          const session = this.sessions.get(sessionId)!
-
-          if (isJSONRPCRequest(message)) {
-            if (session.messageHandler) {
-              if (message.id !== undefined && message.id !== null) {
-                this.requestSessionMap.set(message.id, sessionId)
-                if (!session.pendingRequests) {
-                  session.pendingRequests = new Set()
+                // Clean up mappings and handlers
+                this.removeInitResponseHandler(sessionId, responseHandler)
+                if (message.id !== undefined && message.id !== null) {
+                  this.requestSessionMap.delete(message.id)
+                  session.pendingRequests.delete(message.id)
                 }
-                session.pendingRequests.add(message.id)
               }
-              session.messageHandler(message) // Pass to protocol layer
-              res.writeHead(202) // Respond 202 Accepted
-              res.end()
             }
-          } else {
-            // Notification
+
+            this.addInitResponseHandler(sessionId, responseHandler)
+
+            // Forward the request to the protocol layer
             if (session.messageHandler) {
               session.messageHandler(message)
-              res.writeHead(202) // Acknowledge notification
-              res.end()
+            } else {
+              // No message handler, respond with error
+              this.removeInitResponseHandler(sessionId, responseHandler)
+              res.writeHead(500)
+              res.end(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  error: {
+                    code: -32603,
+                    message: "Internal error: No message handler available",
+                  },
+                  id: "id" in message ? message.id : null,
+                }),
+              )
+            }
+          } else {
+            // Handle regular requests (asynchronous - 202 on POST, response on GET stream)
+            const sessionId = req.headers["mcp-session-id"] as string
+
+            if (!sessionId || !this.sessions.has(sessionId)) {
+              res.writeHead(400)
+              res.end(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  error: {
+                    code: -32000,
+                    message: "Invalid session. A valid Mcp-Session-Id header is required.",
+                  },
+                  id: "id" in message ? message.id : null,
+                }),
+              )
+              return
+            }
+
+            const session = this.sessions.get(sessionId)!
+
+            if (isJSONRPCRequest(message)) {
+              if (session.messageHandler) {
+                if (message.id !== undefined && message.id !== null) {
+                  this.requestSessionMap.set(message.id, sessionId)
+                  if (!session.pendingRequests) {
+                    session.pendingRequests = new Set()
+                  }
+                  session.pendingRequests.add(message.id)
+                }
+                session.messageHandler(message) // Pass to protocol layer
+                res.writeHead(202) // Respond 202 Accepted
+                res.end()
+              }
+            } else {
+              // Notification
+              if (session.messageHandler) {
+                session.messageHandler(message)
+                res.writeHead(202) // Acknowledge notification
+                res.end()
+              }
             }
           }
-        }
-      } catch (err) {
-        res.writeHead(400)
-        res.end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            error: {
-              code: -32700,
-              message: "Parse error",
-              data: String(err),
-            },
-            id: null,
-          }),
-        )
+        } catch (err) {
+          res.writeHead(400)
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              error: {
+                code: -32700,
+                message: "Parse error",
+                data: String(err),
+              },
+              id: null,
+            }),
+          )
 
-        if (this.onerror) {
-          this.onerror(new Error(`Parse error: ${String(err)}`))
+          if (this.onerror) {
+            this.onerror(new Error(`Parse error: ${String(err)}`))
+          }
         }
-      }
+      })
     })
 
     req.on("error", (err) => {

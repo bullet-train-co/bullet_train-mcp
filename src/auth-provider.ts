@@ -1,4 +1,5 @@
 import { AxiosError } from "axios"
+import { requestContext } from "./request-context.js"
 
 /**
  * Interface for providing authentication headers and handling authentication errors
@@ -47,6 +48,34 @@ export class StaticAuthProvider implements AuthProvider {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async handleAuthError(_error: AxiosError): Promise<boolean> {
     // Static auth provider cannot handle auth errors
+    return false
+  }
+}
+
+/**
+ * AuthProvider implementation that uses Bearer tokens from request context
+ * This is used for OAuth flows where the client provides a Bearer token in the Authorization header
+ * The token is extracted by the transport layer and stored in AsyncLocalStorage
+ */
+export class BearerTokenAuthProvider implements AuthProvider {
+  async getAuthHeaders(): Promise<Record<string, string>> {
+    const context = requestContext.getStore()
+    const token = context?.bearerToken
+
+    if (!token) {
+      throw new Error(
+        "No bearer token found in request context. Ensure the client sends Authorization: Bearer <token> header.",
+      )
+    }
+
+    return {
+      Authorization: `Bearer ${token}`,
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async handleAuthError(_error: AxiosError): Promise<boolean> {
+    // Bearer token provider cannot refresh tokens - client must provide a new token
     return false
   }
 }

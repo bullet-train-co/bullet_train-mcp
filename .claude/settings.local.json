@@ -5,7 +5,17 @@
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(jq:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run start:bullet-train:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(BULLET_TRAIN_BASE_URL=http://localhost:3000/api/v1 PUBLIC_URL=https://99d57802efff.ngrok.app npm run start:bullet-train:*)",
+      "Bash(BULLET_TRAIN_BASE_URL=http://localhost:3000/api/v1:*)",
+      "Bash(BULLET_TRAIN_OPENAPI_SPEC=http://localhost:3000/api/v1/openapi.yaml:*)",
+      "Bash(PUBLIC_URL=https://99d57802efff.ngrok.app:*)"
     ],
     "deny": [],
     "ask": []

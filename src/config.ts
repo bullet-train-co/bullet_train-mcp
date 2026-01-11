@@ -1,6 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
-import { AuthProvider } from "./auth-provider.js"
+import { AuthProvider, BearerTokenAuthProvider } from "./auth-provider.js"
 import type { PromptDefinition } from "./prompt-types"
 import type { ResourceDefinition } from "./resource-types"
 
@@ -166,6 +166,11 @@ export function loadConfig(): OpenAPIMCPServerConfig {
       type: "string",
       description: "Provide resources directly as JSON string",
     })
+    .option("use-bearer-token-auth", {
+      type: "boolean",
+      description:
+        "Use Bearer token authentication (reads token from Authorization header on incoming requests)",
+    })
     .help()
     .parseSync()
 
@@ -251,6 +256,19 @@ export function loadConfig(): OpenAPIMCPServerConfig {
 
   const headers = parseHeaders(argv.headers || process.env.API_HEADERS)
 
+  // Check if Bearer token authentication should be used
+  const useBearerTokenAuth =
+    argv["use-bearer-token-auth"] || process.env.USE_BEARER_TOKEN_AUTH === "true"
+
+  // Create authProvider if Bearer token auth is requested
+  let authProvider: AuthProvider | undefined
+  if (useBearerTokenAuth) {
+    authProvider = new BearerTokenAuthProvider()
+    console.error(
+      "Using Bearer token authentication (tokens will be read from Authorization header on incoming requests)",
+    )
+  }
+
   return {
     name: argv.name || process.env.SERVER_NAME || "mcp-openapi-server",
     version: argv["server-version"] || process.env.SERVER_VERSION || "1.0.0",
@@ -259,6 +277,7 @@ export function loadConfig(): OpenAPIMCPServerConfig {
     specInputMethod,
     inlineSpecContent,
     headers,
+    authProvider,
     transportType,
     httpPort,
     httpHost,

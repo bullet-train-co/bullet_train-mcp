@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest"
 import { AxiosError } from "axios"
-import { AuthProvider, StaticAuthProvider, isAuthError } from "../src/auth-provider"
+import {
+  AuthProvider,
+  StaticAuthProvider,
+  BearerTokenAuthProvider,
+  isAuthError,
+} from "../src/auth-provider"
+import { requestContext } from "../src/request-context"
 
 describe("AuthProvider", () => {
   describe("isAuthError", () => {
@@ -352,6 +358,114 @@ describe("AuthProvider", () => {
       const shouldRetry2 = await provider.handleAuthError(error)
       expect(shouldRetry2).toBe(false)
       expect(provider.getRetryCount()).toBe(2)
+    })
+  })
+
+  describe("BearerTokenAuthProvider", () => {
+    it("should return Bearer token from request context", async () => {
+      const provider = new BearerTokenAuthProvider()
+      const token = "test_token_123"
+
+      await requestContext.run({ bearerToken: token }, async () => {
+        const headers = await provider.getAuthHeaders()
+        expect(headers).toEqual({ Authorization: `Bearer ${token}` })
+      })
+    })
+
+    it("should throw error when no token in context", async () => {
+      const provider = new BearerTokenAuthProvider()
+
+      await requestContext.run({}, async () => {
+        await expect(provider.getAuthHeaders()).rejects.toThrow(
+          "No bearer token found in request context",
+        )
+      })
+    })
+
+    it("should throw error when context is undefined", async () => {
+      const provider = new BearerTokenAuthProvider()
+
+      // No context set
+      await expect(provider.getAuthHeaders()).rejects.toThrow(
+        "No bearer token found in request context",
+      )
+    })
+
+    it("should handle different token formats", async () => {
+      const provider = new BearerTokenAuthProvider()
+
+      // JWT-like token
+      const jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123"
+      await requestContext.run({ bearerToken: jwtToken }, async () => {
+        const headers = await provider.getAuthHeaders()
+        expect(headers.Authorization).toBe(`Bearer ${jwtToken}`)
+      })
+
+      // Simple token
+      const simpleToken = "abc123"
+      await requestContext.run({ bearerToken: simpleToken }, async () => {
+        const headers = await provider.getAuthHeaders()
+        expect(headers.Authorization).toBe(`Bearer ${simpleToken}`)
+      })
+
+      // UUID-like token
+      const uuidToken = "550e8400-e29b-41d4-a716-446655440000"
+      await requestContext.run({ bearerToken: uuidToken }, async () => {
+        const headers = await provider.getAuthHeaders()
+        expect(headers.Authorization).toBe(`Bearer ${uuidToken}`)
+      })
+    })
+
+    it("should always return false for handleAuthError", async () => {
+      const provider = new BearerTokenAuthProvider()
+      const error = { response: { status: 401 } } as AxiosError
+
+      const result = await provider.handleAuthError(error)
+      expect(result).toBe(false)
+    })
+
+    it("should handle concurrent requests with different tokens", async () => {
+      const provider = new BearerTokenAuthProvider()
+
+      // Simulate concurrent requests with different tokens
+      const token1 = "token_user_1"
+      const token2 = "token_user_2"
+
+      const [result1, result2] = await Promise.all([
+        requestContext.run({ bearerToken: token1 }, () => provider.getAuthHeaders()),
+        requestContext.run({ bearerToken: token2 }, () => provider.getAuthHeaders()),
+      ])
+
+      expect(result1.Authorization).toBe(`Bearer ${token1}`)
+      expect(result2.Authorization).toBe(`Bearer ${token2}`)
+    })
+
+    it("should handle empty string token", async () => {
+      const provider = new BearerTokenAuthProvider()
+
+      await requestContext.run({ bearerToken: "" }, async () => {
+        await expect(provider.getAuthHeaders()).rejects.toThrow(
+          "No bearer token found in request context",
+        )
+      })
+    })
+
+    it("should preserve token exactly as received", async () => {
+      const provider = new BearerTokenAuthProvider()
+
+      // Token with special characters
+      const tokenWithSpecialChars = "token!@#$%^&*()_+-=[]{}|;':\",./<>?"
+      await requestContext.run({ bearerToken: tokenWithSpecialChars }, async () => {
+        const headers = await provider.getAuthHeaders()
+        expect(headers.Authorization).toBe(`Bearer ${tokenWithSpecialChars}`)
+      })
+
+      // Token with whitespace
+      const tokenWithWhitespace = "token with spaces"
+      await requestContext.run({ bearerToken: tokenWithWhitespace }, async () => {
+        const headers = await provider.getAuthHeaders()
+        expect(headers.Authorization).toBe(`Bearer ${tokenWithWhitespace}`)
+      })
     })
   })
 })
